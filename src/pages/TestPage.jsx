@@ -2,12 +2,16 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import useStore from '../store';
+import { submitToGoogleSheets, formatQuizData } from '../utils/googleSheets';
 
 const TestPage = () => {
   const navigate = useNavigate();
-  const { testSession, selectedSubjects, setAnswer, completeTestSession, startTestSession } = useStore();
+  const { testSession, selectedSubjects, formData, setAnswer, completeTestSession, startTestSession } = useStore();
   const { questions, answers, completed } = testSession;
   const [timeLeft, setTimeLeft] = useState(90 * 60); // 90 minutes in seconds
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submissionError, setSubmissionError] = useState(null);
+  const [submissionSuccess, setSubmissionSuccess] = useState(false);
 
   // Initialize test session when component mounts
   useEffect(() => {
@@ -40,26 +44,42 @@ const TestPage = () => {
   const progress = questions.length > 0 ? (answeredCount / questions.length) * 100 : 0;
 
   // Handle submit
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     if (answeredCount < questions.length) {
       if (!window.confirm(`Siz ${questions.length - answeredCount} ta savolga javob bermadingiz. Testni yakunlashni xohlaysizmi?`)) {
         return;
       }
     }
-    completeTestSession();
+
+    setIsSubmitting(true);
+    setSubmissionError(null);
+
+    try {
+      // Format and submit data to Google Sheets
+      const dataToSubmit = formatQuizData(formData, selectedSubjects, {
+        ...testSession,
+        answers,
+        completed: true,
+      });
+
+      await submitToGoogleSheets(dataToSubmit);
+
+      // Mark test as completed
+      completeTestSession();
+      setSubmissionSuccess(true);
+    } catch (error) {
+      console.error('Submission error:', error);
+      setSubmissionError(error.message);
+      // Still complete the test locally even if submission fails
+      completeTestSession();
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   if (completed) {
-    // Calculate score
-    let score = 0;
-    questions.forEach(q => {
-      if (answers[q.id] === q.correctAnswer) {
-        score++;
-      }
-    });
-
     return (
-      <div className="max-w-6xl mx-auto">
+      <div className="max-w-4xl mx-auto">
         <div className="bg-white rounded-xl shadow-lg p-6 md:p-8">
           <div className="text-center mb-8">
             <div className="w-24 h-24 mx-auto mb-6 bg-green-100 rounded-full flex items-center justify-center">
@@ -67,32 +87,62 @@ const TestPage = () => {
                 <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
               </svg>
             </div>
-            <h1 className="text-3xl font-bold text-green-600 mb-4">Test yakunlandi!</h1>
-            <p className="text-xl text-gray-700 mb-6">
-              Umumiy natija: {score}/{questions.length} ({Math.round((score/questions.length) * 100)}%)
+            <h1 className="text-3xl font-bold text-green-600 mb-4">Test muvaffaqiyatli yakunlandi!</h1>
+            <p className="text-lg text-gray-600 mb-6">
+              Sizning javoblaringiz qabul qilindi. Natijalar keyinroq e'lon qilinadi.
             </p>
+
+            {/* Submission status messages */}
+            {submissionSuccess && (
+              <div className="mb-4 p-4 bg-green-50 border border-green-200 rounded-lg">
+                <p className="text-green-800 flex items-center justify-center gap-2">
+                  <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+                    <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                  </svg>
+                  Ma'lumotlaringiz muvaffaqiyatli yuborildi!
+                </p>
+              </div>
+            )}
+
+            {submissionError && (
+              <div className="mb-4 p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
+                <p className="text-yellow-800 text-sm">
+                  <span className="font-medium">Diqqat:</span> Ma'lumotlarni yuborishda xatolik yuz berdi.
+                  Javoblaringiz saqlandi, lekin ularni qayta yuborish uchun administrator bilan bog'laning.
+                </p>
+              </div>
+            )}
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-8">
-            {selectedSubjects.map(subject => {
-              const subjectQuestions = questions.filter(q => q.subject === subject);
-              const subjectAnswers = subjectQuestions.filter(q => answers[q.id] === q.correctAnswer).length;
-              return (
-                <div key={subject} className="p-6 bg-blue-50 rounded-lg">
-                  <h3 className="text-lg font-semibold text-blue-900 mb-2">
-                    {subject.charAt(0).toUpperCase() + subject.slice(1)}
-                  </h3>
-                  <p className="text-blue-700">
-                    {subjectAnswers}/{subjectQuestions.length} to'g'ri
-                  </p>
-                </div>
-              );
-            })}
+          <div className="bg-blue-50 rounded-lg p-6 mb-8">
+            <h2 className="text-xl font-semibold text-blue-900 mb-6 text-center">Ma'lumotlaringiz</h2>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="bg-white rounded-lg p-4">
+                <p className="text-sm text-gray-600 mb-1">Ism</p>
+                <p className="text-lg font-semibold text-gray-800">{formData.first_name}</p>
+              </div>
+              <div className="bg-white rounded-lg p-4">
+                <p className="text-sm text-gray-600 mb-1">Familiya</p>
+                <p className="text-lg font-semibold text-gray-800">{formData.last_name}</p>
+              </div>
+              <div className="bg-white rounded-lg p-4">
+                <p className="text-sm text-gray-600 mb-1">Viloyat</p>
+                <p className="text-lg font-semibold text-gray-800">{formData.region}</p>
+              </div>
+              <div className="bg-white rounded-lg p-4">
+                <p className="text-sm text-gray-600 mb-1">Tuman</p>
+                <p className="text-lg font-semibold text-gray-800">{formData.district}</p>
+              </div>
+              <div className="bg-white rounded-lg p-4 md:col-span-2">
+                <p className="text-sm text-gray-600 mb-1">Maktab raqami</p>
+                <p className="text-lg font-semibold text-gray-800">{formData.school_number}</p>
+              </div>
+            </div>
           </div>
 
           <div className="flex flex-col sm:flex-row gap-4 justify-center pt-6 border-t">
             <button
-              onClick={() => navigate('/subjects')}
+              onClick={() => navigate('/')}
               className="px-8 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium"
             >
               ← Asosiy sahifaga qaytish
@@ -115,13 +165,13 @@ const TestPage = () => {
                 {selectedSubjects.map(s => s.charAt(0).toUpperCase() + s.slice(1)).join(', ')} fanlaridan
               </p>
             </div>
-            
+
             <div className="flex flex-wrap gap-4">
               <div className="px-4 py-2 bg-blue-50 rounded-lg">
                 <div className="text-sm text-gray-600">Qolgan vaqt</div>
                 <div className="text-xl font-bold text-blue-700">{formatTime(timeLeft)}</div>
               </div>
-              
+
               <div className="px-4 py-2 bg-green-50 rounded-lg">
                 <div className="text-sm text-gray-600">Javob berildi</div>
                 <div className="text-xl font-bold text-green-700">{answeredCount}/{questions.length}</div>
@@ -131,7 +181,7 @@ const TestPage = () => {
 
           {/* Progress bar */}
           <div className="w-full bg-gray-200 rounded-full h-3">
-            <div 
+            <div
               className="bg-blue-600 h-3 rounded-full transition-all duration-300"
               style={{ width: `${progress}%` }}
             ></div>
@@ -168,11 +218,10 @@ const TestPage = () => {
                 {question.options.map((option, optionIndex) => (
                   <label
                     key={optionIndex}
-                    className={`flex items-center p-3 rounded-lg cursor-pointer border transition-colors ${
-                      answers[question.id] === optionIndex
-                        ? 'bg-blue-50 border-blue-300'
-                        : 'hover:bg-gray-50 border-gray-200'
-                    }`}
+                    className={`flex items-center p-3 rounded-lg cursor-pointer border transition-colors ${answers[question.id] === optionIndex
+                      ? 'bg-blue-50 border-blue-300'
+                      : 'hover:bg-gray-50 border-gray-200'
+                      }`}
                   >
                     <input
                       type="radio"
@@ -205,7 +254,7 @@ const TestPage = () => {
                 Barcha savollarga javob berganingizdan so'ng "Testni yakunlash" tugmasini bosing
               </p>
             </div>
-            
+
             <div className="flex gap-4">
               <button
                 onClick={() => {
@@ -217,16 +266,30 @@ const TestPage = () => {
               >
                 Saqlab qaytish
               </button>
-              
+
               <button
                 onClick={handleSubmit}
-                className="px-8 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 font-medium shadow-md"
+                disabled={isSubmitting}
+                className={`px-8 py-3 rounded-lg font-medium shadow-md flex items-center gap-2 ${isSubmitting
+                    ? 'bg-gray-400 cursor-not-allowed'
+                    : 'bg-green-600 hover:bg-green-700 text-white'
+                  }`}
               >
-                Testni yakunlash
+                {isSubmitting ? (
+                  <>
+                    <svg className="animate-spin h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                    Yuborilmoqda...
+                  </>
+                ) : (
+                  'Testni yakunlash'
+                )}
               </button>
             </div>
           </div>
-          
+
           <div className="mt-6 p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
             <p className="text-yellow-800">
               <span className="font-medium">Diqqat:</span> Testni yakunlaganingizdan so'ng qayta o'zgartirish imkoni yo'q.
